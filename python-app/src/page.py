@@ -1,26 +1,19 @@
-from flask import Flask, request, jsonify, send_from_directory, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import cv2
 import os
-import tempfile
-import requests
-import urllib.parse
 import time
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 import logging
-import sys
 import gc
-import numpy as np
 import torch
 from threading import Thread, Lock
 from queue import Queue
 import uuid
 import json
-import threading
 import base64
 from ultralytics import YOLO
-from datetime import datetime
 
 # Configure logging
 logging.basicConfig(

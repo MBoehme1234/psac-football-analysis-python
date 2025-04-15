@@ -1,0 +1,10 @@
+version: 0.0
+os: linux
+files:
+  - source: python-app/src/page.py
+    destination: /app/
+hooks:
+  AfterInstall:
+    - location: scripts/start_app.sh
+      timeout: 300
+      runas: ec2-user 
