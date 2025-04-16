@@ -39,7 +39,13 @@ if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
 # Load YOLO model
-model = YOLO('yolov8n.pt')
+try:
+    model = YOLO('yolov8n.pt')
+except Exception as e:
+    print("Downloading YOLO model...")
+    from ultralytics import YOLO
+    model = YOLO("yolov8n")  # this will download the model if it doesn't exist
+    model.model.save('yolov8n.pt')  # save the model
 
 # Define allowed file extensions
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'jpg', 'jpeg', 'png'}
