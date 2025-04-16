@@ -61,31 +61,32 @@ def process_frame(frame):
     """Process a single frame with YOLO model"""
     try:
         results = model(frame, verbose=False)
-        # For ultralytics 8.0.20, we need to use the result's plotted array
-        annotated_frame = results[0].plot()  # This returns a numpy array
+        result = results[0]
+        annotated_frame = frame.copy()
+        
+        # Draw boxes if they exist
+        if hasattr(result, 'boxes') and result.boxes is not None:
+            boxes = result.boxes
+            for box in boxes:
+                # Get box coordinates and convert to numpy
+                coords = box.xyxy[0].cpu().numpy()
+                # Get confidence and class
+                conf = float(box.conf[0].cpu().numpy())
+                cls = int(box.cls[0].cpu().numpy())
+                
+                # Draw rectangle
+                x1, y1, x2, y2 = map(int, coords)
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                
+                # Add label with class name and confidence
+                label = f'{model.names[cls]} {conf:.2f}'
+                cv2.putText(annotated_frame, label, (x1, y1 - 10), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
         return annotated_frame
     except Exception as e:
         logging.error(f"Error processing frame: {str(e)}")
-        # If plotting fails, try manual drawing
-        try:
-            result = results[0]
-            annotated_frame = frame.copy()
-            if hasattr(result, 'boxes') and result.boxes is not None:
-                for box in result.boxes:
-                    # Get box coordinates
-                    coords = box.xyxy[0].cpu().numpy()
-                    # Draw rectangle
-                    cv2.rectangle(
-                        annotated_frame, 
-                        (int(coords[0]), int(coords[1])), 
-                        (int(coords[2]), int(coords[3])), 
-                        (0, 255, 0), 
-                        2
-                    )
-            return annotated_frame
-        except Exception as e2:
-            logging.error(f"Backup drawing also failed: {str(e2)}")
-            return frame
+        return frame
 
 def process_video(video_path, task_id):
     """Process video frame by frame and store results"""
