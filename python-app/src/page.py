@@ -104,11 +104,11 @@ def process_video(video_path, task_id):
         logging.info(f"Processing video: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
         # Create output video writer
-        output_filename = f'processed_{task_id}.mp4'
+        output_filename = f'processed_{task_id}.avi'  # Use AVI format instead of MP4
         output_path = os.path.join(UPLOAD_FOLDER, output_filename)
 
-        # Try different codec configurations
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Try MP4V codec first
+        # Use MJPG codec which is widely supported
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         out = cv2.VideoWriter(
             output_path,
             fourcc,
@@ -117,11 +117,10 @@ def process_video(video_path, task_id):
         )
 
         if not out.isOpened():
-            # If MP4V fails, try XVID
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
-            temp_output = os.path.join(UPLOAD_FOLDER, f'temp_{task_id}.avi')
+            # If MJPG fails, try raw uncompressed
+            fourcc = cv2.VideoWriter_fourcc(*'DIVX')
             out = cv2.VideoWriter(
-                temp_output,
+                output_path,
                 fourcc,
                 fps,
                 (frame_width, frame_height)
@@ -130,7 +129,7 @@ def process_video(video_path, task_id):
             if not out.isOpened():
                 raise Exception("Could not create output video file with any codec")
 
-        logging.info(f"Video writer initialized successfully")
+        logging.info(f"Video writer initialized successfully with output path: {output_path}")
 
         # Process frames
         frame_count = 0
@@ -168,26 +167,6 @@ def process_video(video_path, task_id):
         # Release everything
         cap.release()
         out.release()
-
-        # If we used XVID/AVI, convert to MP4
-        if output_path.endswith('.mp4') and os.path.exists(temp_output):
-            try:
-                logging.info("Converting AVI to MP4...")
-                import subprocess
-                subprocess.run([
-                    'ffmpeg',
-                    '-i', temp_output,
-                    '-c:v', 'libx264',
-                    '-preset', 'medium',
-                    '-crf', '23',
-                    output_path
-                ], check=True)
-                os.remove(temp_output)  # Clean up temporary AVI file
-                logging.info("Conversion to MP4 successful")
-            except Exception as e:
-                logging.error(f"Error converting to MP4: {str(e)}")
-                # If conversion fails, just rename the AVI file to MP4
-                os.rename(temp_output, output_path)
 
         # Send completion event with video URL
         with results_lock:
