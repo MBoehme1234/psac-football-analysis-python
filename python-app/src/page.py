@@ -61,10 +61,30 @@ def process_frame(frame):
     """Process a single frame with YOLO model"""
     try:
         results = model(frame)
-        annotated_frame = results[0].plot()
+        # Get the plotted frame directly from the model's prediction
+        annotated_frame = results[0].orig_img.copy()
+        
+        # Draw boxes manually if needed
+        for box in results[0].boxes:
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            conf = float(box.conf[0])
+            cls = int(box.cls[0])
+            
+            # Convert coordinates to integers
+            x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+            
+            # Draw rectangle
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            
+            # Add label
+            label = f'{model.names[cls]} {conf:.2f}'
+            cv2.putText(annotated_frame, label, (x1, y1 - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
         return annotated_frame
     except Exception as e:
         logging.error(f"Error processing frame: {str(e)}")
+        logging.error(f"Full error details: {str(e.__class__.__name__)}")
         return frame
 
 def process_video(video_path, task_id):
