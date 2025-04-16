@@ -89,7 +89,7 @@ def process_frame(frame):
         return frame
 
 def process_video(video_path, task_id):
-    """Process video frame by frame and store results"""
+    """Process video frame by frame and create a new MP4"""
     try:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -103,23 +103,25 @@ def process_video(video_path, task_id):
 
         logging.info(f"Processing video: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
-        # Send initial metadata
-        with results_lock:
-            if task_id not in processing_results:
-                processing_results[task_id] = {'events': []}
-            processing_results[task_id]['events'].append({
-                'type': 'metadata',
-                'frame_width': frame_width,
-                'frame_height': frame_height,
-                'fps': fps,
-                'total_frames': total_frames
-            })
-            logging.info(f"Sent metadata for task {task_id}")
+        # Create output video writer
+        output_filename = f'processed_{task_id}.mp4'
+        output_path = os.path.join(UPLOAD_FOLDER, output_filename)
+        
+        # Try different codecs
+        codecs = ['avc1', 'H264', 'mp4v']
+        out = None
+        for codec in codecs:
+            fourcc = cv2.VideoWriter_fourcc(*codec)
+            out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
+            if out.isOpened():
+                logging.info(f"Using codec: {codec}")
+                break
+        
+        if not out or not out.isOpened():
+            raise Exception("Could not create output video file")
 
-        # Process frames in batches
+        # Process frames
         frame_count = 0
-        batch_size = 30  # Process 30 frames at a time
-        current_batch = []
         failed_frames = []
 
         while True:
@@ -130,53 +132,44 @@ def process_video(video_path, task_id):
             try:
                 # Process frame
                 processed_frame = process_frame(frame)
+                out.write(processed_frame)
                 
-                # Convert frame to base64
-                _, buffer = cv2.imencode('.jpg', processed_frame)
-                frame_base64 = base64.b64encode(buffer).decode('utf-8')
-                current_batch.append(frame_base64)
-
                 # Update progress
                 frame_count += 1
                 progress = int((frame_count / total_frames) * 100)
                 
-                # Send batch when it reaches batch_size or at the end
-                if len(current_batch) >= batch_size or frame_count == total_frames:
-                    with results_lock:
-                        if task_id not in processing_results:
-                            processing_results[task_id] = {'events': []}
-                        processing_results[task_id]['events'].append({
-                            'type': 'batch',
-                            'frames': current_batch,
-                            'progress': progress,
-                            'current_frame': frame_count,
-                            'total_frames': total_frames
-                        })
-                        logging.info(f"Sent batch of {len(current_batch)} frames for task {task_id}. Progress: {progress}%")
-                    current_batch = []  # Clear the batch
-                    
-                    # Force garbage collection after each batch
-                    gc.collect()
-                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                # Send progress update
+                with results_lock:
+                    if task_id not in processing_results:
+                        processing_results[task_id] = {'events': []}
+                    processing_results[task_id]['events'].append({
+                        'type': 'progress',
+                        'progress': progress,
+                        'current_frame': frame_count,
+                        'total_frames': total_frames
+                    })
 
             except Exception as e:
                 logging.error(f"Error processing frame {frame_count}: {str(e)}")
                 failed_frames.append(frame_count)
 
+        # Release everything
         cap.release()
+        out.release()
 
-        # Send completion event
+        # Send completion event with video URL
         with results_lock:
             if task_id not in processing_results:
                 processing_results[task_id] = {'events': []}
             processing_results[task_id]['events'].append({
                 'type': 'complete',
+                'video_url': f'/uploads/{output_filename}',
                 'total_frames': frame_count,
                 'failed_frames': failed_frames
             })
             logging.info(f"Processing complete for task {task_id}. Total frames: {frame_count}, Failed frames: {len(failed_frames)}")
 
-        # Clean up the uploaded file
+        # Clean up the original uploaded file
         try:
             os.remove(video_path)
         except Exception as e:
