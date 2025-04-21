@@ -104,12 +104,12 @@ def process_video(video_path, task_id):
 
         logging.info(f"Processing video: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
-        # Create output video writer with Motion JPEG codec
-        output_filename = f'processed_{task_id}.avi'  # Using .avi for MJPG
+        # Create output video writer with XVID codec
+        output_filename = f'processed_{task_id}.avi'
         output_path = os.path.join(UPLOAD_FOLDER, output_filename)
         
-        # Use Motion JPEG codec
-        fourcc = cv2.VideoWriter_fourcc('M','J','P','G')
+        # Use XVID codec
+        fourcc = cv2.VideoWriter_fourcc('X','V','I','D')
         out = cv2.VideoWriter(
             output_path,
             fourcc,
@@ -121,7 +121,7 @@ def process_video(video_path, task_id):
             logging.error("Failed to initialize video writer")
             raise Exception("Could not create output video file")
         else:
-            logging.info("Successfully initialized video writer with MJPG codec")
+            logging.info("Successfully initialized video writer with XVID codec")
 
         # Process frames
         frame_count = 0
@@ -133,8 +133,42 @@ def process_video(video_path, task_id):
                 break
 
             try:
+                # Validate frame
+                if frame is None:
+                    logging.error(f"Frame {frame_count} is None")
+                    failed_frames.append(frame_count)
+                    continue
+
+                if frame.size == 0:
+                    logging.error(f"Frame {frame_count} is empty")
+                    failed_frames.append(frame_count)
+                    continue
+
                 # Process frame
                 processed_frame = process_frame(frame)
+                
+                # Validate processed frame
+                if processed_frame is None:
+                    logging.error(f"Processed frame {frame_count} is None")
+                    failed_frames.append(frame_count)
+                    continue
+
+                if processed_frame.size == 0:
+                    logging.error(f"Processed frame {frame_count} is empty")
+                    failed_frames.append(frame_count)
+                    continue
+
+                # Ensure frame is in the correct format (BGR)
+                if len(processed_frame.shape) != 3 or processed_frame.shape[2] != 3:
+                    logging.error(f"Frame {frame_count} has incorrect shape: {processed_frame.shape}")
+                    processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR)
+
+                # Ensure frame dimensions match output dimensions
+                if processed_frame.shape[1] != frame_width or processed_frame.shape[0] != frame_height:
+                    logging.error(f"Frame {frame_count} has incorrect dimensions: {processed_frame.shape}")
+                    processed_frame = cv2.resize(processed_frame, (frame_width, frame_height))
+
+                # Write frame
                 success = out.write(processed_frame)
                 
                 if not success:
@@ -142,6 +176,15 @@ def process_video(video_path, task_id):
                     failed_frames.append(frame_count)
                 elif frame_count % 100 == 0:  # Log progress every 100 frames
                     logging.info(f"Successfully wrote frame {frame_count}")
+                    # Flush the writer to ensure frames are being written
+                    out.release()
+                    out = cv2.VideoWriter(
+                        output_path,
+                        fourcc,
+                        fps,
+                        (frame_width, frame_height),
+                        isColor=True
+                    )
                 
                 # Update progress
                 frame_count += 1
