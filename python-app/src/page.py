@@ -103,12 +103,12 @@ def process_video(video_path, task_id):
 
         logging.info(f"Processing video: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
-        # Create output video writer
-        output_filename = f'processed_{task_id}.avi'  # Use AVI format instead of MP4
+        # Create output video writer with MPEG4 codec
+        output_filename = f'processed_{task_id}.mp4'
         output_path = os.path.join(UPLOAD_FOLDER, output_filename)
-
-        # Use MJPG codec which is widely supported
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        
+        # Use MPEG4 codec
+        fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
         out = cv2.VideoWriter(
             output_path,
             fourcc,
@@ -117,19 +117,7 @@ def process_video(video_path, task_id):
         )
 
         if not out.isOpened():
-            # If MJPG fails, try raw uncompressed
-            fourcc = cv2.VideoWriter_fourcc(*'DIVX')
-            out = cv2.VideoWriter(
-                output_path,
-                fourcc,
-                fps,
-                (frame_width, frame_height)
-            )
-            
-            if not out.isOpened():
-                raise Exception("Could not create output video file with any codec")
-
-        logging.info(f"Video writer initialized successfully with output path: {output_path}")
+            raise Exception("Could not create output video file")
 
         # Process frames
         frame_count = 0
