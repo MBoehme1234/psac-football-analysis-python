@@ -104,12 +104,12 @@ def process_video(video_path, task_id):
 
         logging.info(f"Processing video: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
-        # Create output video writer with MPEG4 codec
-        output_filename = f'processed_{task_id}.mp4'
+        # Create output video writer with Motion JPEG codec
+        output_filename = f'processed_{task_id}.avi'  # Using .avi for MJPG
         output_path = os.path.join(UPLOAD_FOLDER, output_filename)
         
-        # Use MPEG4 codec
-        fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
+        # Use Motion JPEG codec
+        fourcc = cv2.VideoWriter_fourcc('M','J','P','G')
         out = cv2.VideoWriter(
             output_path,
             fourcc,
@@ -121,7 +121,7 @@ def process_video(video_path, task_id):
             logging.error("Failed to initialize video writer")
             raise Exception("Could not create output video file")
         else:
-            logging.info("Successfully initialized video writer with MPEG4 codec")
+            logging.info("Successfully initialized video writer with MJPG codec")
 
         # Process frames
         frame_count = 0
@@ -140,6 +140,8 @@ def process_video(video_path, task_id):
                 if not success:
                     logging.error(f"Failed to write frame {frame_count}")
                     failed_frames.append(frame_count)
+                elif frame_count % 100 == 0:  # Log progress every 100 frames
+                    logging.info(f"Successfully wrote frame {frame_count}")
                 
                 # Update progress
                 frame_count += 1
