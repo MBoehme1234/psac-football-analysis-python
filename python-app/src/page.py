@@ -14,6 +14,7 @@ import uuid
 import json
 import base64
 from ultralytics import YOLO
+import numpy as np
 
 # Configure logging
 logging.basicConfig(
@@ -103,21 +104,63 @@ def process_video(video_path, task_id):
 
         logging.info(f"Processing video: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
-        # Create output video writer with MPEG4 codec
+        # Create output video writer
         output_filename = f'processed_{task_id}.mp4'
         output_path = os.path.join(UPLOAD_FOLDER, output_filename)
         
-        # Use MPEG4 codec
-        fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
-        out = cv2.VideoWriter(
-            output_path,
-            fourcc,
-            fps,
-            (frame_width, frame_height)
-        )
+        # Try different codecs in order of preference
+        codecs = [
+            ('avc1', '.mp4'),  # H.264
+            ('H264', '.mp4'),  # Alternative H.264
+            ('XVID', '.avi'),  # XVID
+            ('MJPG', '.avi')   # Motion JPEG
+        ]
+        
+        out = None
+        for codec, ext in codecs:
+            try:
+                if codec in ['avc1', 'H264']:
+                    # For H.264, try platform-specific fourcc
+                    fourcc = cv2.VideoWriter_fourcc(*codec)
+                else:
+                    fourcc = cv2.VideoWriter_fourcc(*codec)
+                
+                temp_output = os.path.join(UPLOAD_FOLDER, f'processed_{task_id}{ext}')
+                out = cv2.VideoWriter(
+                    temp_output,
+                    fourcc,
+                    fps,
+                    (frame_width, frame_height)
+                )
+                
+                # Test write a blank frame to verify codec works
+                test_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+                if out.write(test_frame):
+                    out.release()
+                    out = cv2.VideoWriter(
+                        temp_output,
+                        fourcc,
+                        fps,
+                        (frame_width, frame_height)
+                    )
+                    output_path = temp_output
+                    logging.info(f"Successfully initialized video writer with codec: {codec}")
+                    break
+                else:
+                    out.release()
+                    out = None
+            except Exception as e:
+                logging.warning(f"Failed to initialize video writer with codec {codec}: {str(e)}")
+                if out:
+                    out.release()
+                    out = None
+                try:
+                    os.remove(temp_output)
+                except:
+                    pass
 
-        if not out.isOpened():
-            raise Exception("Could not create output video file")
+        if not out:
+            raise Exception("Could not initialize video writer with any codec")
 
         # Process frames
         frame_count = 0
@@ -131,7 +174,11 @@ def process_video(video_path, task_id):
             try:
                 # Process frame
                 processed_frame = process_frame(frame)
-                out.write(processed_frame)
+                success = out.write(processed_frame)
+                
+                if not success:
+                    logging.error(f"Failed to write frame {frame_count}")
+                    failed_frames.append(frame_count)
                 
                 # Update progress
                 frame_count += 1
@@ -156,13 +203,17 @@ def process_video(video_path, task_id):
         cap.release()
         out.release()
 
+        # Verify the output file exists and has size
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise Exception("Output video file is empty or does not exist")
+
         # Send completion event with video URL
         with results_lock:
             if task_id not in processing_results:
                 processing_results[task_id] = {'events': []}
             processing_results[task_id]['events'].append({
                 'type': 'complete',
-                'video_url': f'/uploads/{output_filename}',
+                'video_url': f'/uploads/{os.path.basename(output_path)}',
                 'total_frames': frame_count,
                 'failed_frames': failed_frames
             })
