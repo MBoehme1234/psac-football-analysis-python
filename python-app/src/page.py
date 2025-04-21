@@ -15,6 +15,9 @@ import json
 import base64
 from ultralytics import YOLO
 import numpy as np
+import subprocess
+import tempfile
+import shutil
 
 # Configure logging
 logging.basicConfig(
@@ -104,129 +107,114 @@ def process_video(video_path, task_id):
 
         logging.info(f"Processing video: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
-        # Create output video writer with XVID codec
-        output_filename = f'processed_{task_id}.avi'
-        output_path = os.path.join(UPLOAD_FOLDER, output_filename)
-        
-        # Use XVID codec
-        fourcc = cv2.VideoWriter_fourcc('X','V','I','D')
-        out = cv2.VideoWriter(
-            output_path,
-            fourcc,
-            fps,
-            (frame_width, frame_height)
-        )
+        # Create temporary directory for frames
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logging.info(f"Created temporary directory for frames: {temp_dir}")
+            
+            # Process frames and save as images
+            frame_count = 0
+            failed_frames = []
 
-        if not out.isOpened():
-            logging.error("Failed to initialize video writer")
-            raise Exception("Could not create output video file")
-        else:
-            logging.info("Successfully initialized video writer with XVID codec")
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-        # Process frames
-        frame_count = 0
-        failed_frames = []
+                try:
+                    # Process frame
+                    processed_frame = process_frame(frame)
+                    
+                    # Save frame as image
+                    frame_path = os.path.join(temp_dir, f'frame_{frame_count:06d}.png')
+                    success = cv2.imwrite(frame_path, processed_frame)
+                    
+                    if not success:
+                        logging.error(f"Failed to write frame {frame_count}")
+                        failed_frames.append(frame_count)
+                    elif frame_count % 100 == 0:
+                        logging.info(f"Successfully wrote frame {frame_count}")
+                    
+                    # Update progress
+                    frame_count += 1
+                    progress = int((frame_count / total_frames) * 100)
+                    
+                    # Send progress update
+                    with results_lock:
+                        if task_id not in processing_results:
+                            processing_results[task_id] = {'events': []}
+                        processing_results[task_id]['events'].append({
+                            'type': 'progress',
+                            'progress': progress,
+                            'current_frame': frame_count,
+                            'total_frames': total_frames
+                        })
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+                except Exception as e:
+                    logging.error(f"Error processing frame {frame_count}: {str(e)}")
+                    failed_frames.append(frame_count)
 
+            # Release video capture
+            cap.release()
+
+            if frame_count == 0:
+                raise Exception("No frames were processed")
+
+            # Create output video using FFmpeg
+            output_filename = f'processed_{task_id}.mp4'
+            output_path = os.path.join(UPLOAD_FOLDER, output_filename)
+            
+            # FFmpeg command to create video from frames
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-y',  # Overwrite output file if it exists
+                '-framerate', str(fps),
+                '-i', os.path.join(temp_dir, 'frame_%06d.png'),
+                '-c:v', 'libx264',  # Use H.264 codec
+                '-preset', 'medium',  # Balance between speed and compression
+                '-pix_fmt', 'yuv420p',  # Standard pixel format for web playback
+                '-movflags', '+faststart',  # Enable fast start for web playback
+                output_path
+            ]
+            
+            logging.info(f"Running FFmpeg command: {' '.join(ffmpeg_cmd)}")
+            
+            # Run FFmpeg
             try:
-                # Validate frame
-                if frame is None:
-                    logging.error(f"Frame {frame_count} is None")
-                    failed_frames.append(frame_count)
-                    continue
-
-                if frame.size == 0:
-                    logging.error(f"Frame {frame_count} is empty")
-                    failed_frames.append(frame_count)
-                    continue
-
-                # Process frame
-                processed_frame = process_frame(frame)
+                result = subprocess.run(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
                 
-                # Validate processed frame
-                if processed_frame is None:
-                    logging.error(f"Processed frame {frame_count} is None")
-                    failed_frames.append(frame_count)
-                    continue
-
-                if processed_frame.size == 0:
-                    logging.error(f"Processed frame {frame_count} is empty")
-                    failed_frames.append(frame_count)
-                    continue
-
-                # Ensure frame is in the correct format (BGR)
-                if len(processed_frame.shape) != 3 or processed_frame.shape[2] != 3:
-                    logging.error(f"Frame {frame_count} has incorrect shape: {processed_frame.shape}")
-                    processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR)
-
-                # Ensure frame dimensions match output dimensions
-                if processed_frame.shape[1] != frame_width or processed_frame.shape[0] != frame_height:
-                    logging.error(f"Frame {frame_count} has incorrect dimensions: {processed_frame.shape}")
-                    processed_frame = cv2.resize(processed_frame, (frame_width, frame_height))
-
-                # Write frame
-                success = out.write(processed_frame)
+                if result.returncode != 0:
+                    logging.error(f"FFmpeg error: {result.stderr}")
+                    raise Exception(f"FFmpeg failed with error: {result.stderr}")
+                else:
+                    logging.info("FFmpeg successfully created video file")
                 
-                if not success:
-                    logging.error(f"Failed to write frame {frame_count}")
-                    failed_frames.append(frame_count)
-                elif frame_count % 100 == 0:  # Log progress every 100 frames
-                    logging.info(f"Successfully wrote frame {frame_count}")
-                    # Flush the writer to ensure frames are being written
-                    out.release()
-                    out = cv2.VideoWriter(
-                        output_path,
-                        fourcc,
-                        fps,
-                        (frame_width, frame_height),
-                        isColor=True
-                    )
-                
-                # Update progress
-                frame_count += 1
-                progress = int((frame_count / total_frames) * 100)
-                
-                # Send progress update
-                with results_lock:
-                    if task_id not in processing_results:
-                        processing_results[task_id] = {'events': []}
-                    processing_results[task_id]['events'].append({
-                        'type': 'progress',
-                        'progress': progress,
-                        'current_frame': frame_count,
-                        'total_frames': total_frames
-                    })
-
             except Exception as e:
-                logging.error(f"Error processing frame {frame_count}: {str(e)}")
-                failed_frames.append(frame_count)
+                logging.error(f"Error running FFmpeg: {str(e)}")
+                raise
 
-        # Release everything
-        cap.release()
-        out.release()
+            # Verify the output file exists and has size
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                raise Exception("Output video file is empty or does not exist")
+            else:
+                file_size = os.path.getsize(output_path)
+                logging.info(f"Successfully created output video file. Size: {file_size} bytes")
 
-        # Verify the output file exists and has size
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise Exception("Output video file is empty or does not exist")
-        else:
-            file_size = os.path.getsize(output_path)
-            logging.info(f"Successfully created output video file. Size: {file_size} bytes")
-
-        # Send completion event with video URL
-        with results_lock:
-            if task_id not in processing_results:
-                processing_results[task_id] = {'events': []}
-            processing_results[task_id]['events'].append({
-                'type': 'complete',
-                'video_url': f'/uploads/{output_filename}',
-                'total_frames': frame_count,
-                'failed_frames': failed_frames
-            })
-            logging.info(f"Processing complete for task {task_id}. Total frames: {frame_count}, Failed frames: {len(failed_frames)}")
+            # Send completion event with video URL
+            with results_lock:
+                if task_id not in processing_results:
+                    processing_results[task_id] = {'events': []}
+                processing_results[task_id]['events'].append({
+                    'type': 'complete',
+                    'video_url': f'/uploads/{output_filename}',
+                    'total_frames': frame_count,
+                    'failed_frames': failed_frames
+                })
+                logging.info(f"Processing complete for task {task_id}. Total frames: {frame_count}, Failed frames: {len(failed_frames)}")
 
         # Clean up the original uploaded file
         try:
