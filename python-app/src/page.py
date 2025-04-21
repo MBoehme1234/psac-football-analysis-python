@@ -309,12 +309,53 @@ def serve_file(filename):
             print(f"[ERROR] File not found: {file_path}")
             return jsonify({'error': 'File not found'}), 404
             
-        return send_file(
-            file_path,
-            mimetype='video/mp4',
-            as_attachment=False,
-            conditional=True
-        )
+        # Get file size
+        file_size = os.path.getsize(file_path)
+        
+        # Get range header
+        range_header = request.headers.get('Range', None)
+        
+        if range_header:
+            # Parse range header
+            start_bytes = int(range_header.split('=')[1].split('-')[0])
+            end_bytes = min(start_bytes + 1024 * 1024, file_size - 1)  # 1MB chunks
+            
+            # Read file chunk
+            with open(file_path, 'rb') as f:
+                f.seek(start_bytes)
+                data = f.read(end_bytes - start_bytes + 1)
+            
+            # Create response
+            response = Response(
+                data,
+                206,  # Partial content
+                mimetype='video/mp4',
+                direct_passthrough=True
+            )
+            
+            # Add headers
+            response.headers.add('Content-Range', f'bytes {start_bytes}-{end_bytes}/{file_size}')
+            response.headers.add('Accept-Ranges', 'bytes')
+            response.headers.add('Content-Length', str(end_bytes - start_bytes + 1))
+            response.headers.add('Content-Type', 'video/mp4')
+            response.headers.add('Cache-Control', 'no-cache')
+            response.headers.add('Connection', 'keep-alive')
+            
+        else:
+            # Full file response
+            response = send_file(
+                file_path,
+                mimetype='video/mp4',
+                as_attachment=False,
+                conditional=True
+            )
+            response.headers.add('Accept-Ranges', 'bytes')
+            response.headers.add('Content-Length', str(file_size))
+            response.headers.add('Cache-Control', 'no-cache')
+            response.headers.add('Connection', 'keep-alive')
+        
+        return response
+        
     except Exception as e:
         print(f"[ERROR] Error serving file: {str(e)}")
         return jsonify({'error': str(e)}), 404
