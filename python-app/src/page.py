@@ -36,14 +36,21 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# CORS configuration for both regular endpoints and SSE
+# CORS configuration with specific rules for SSE
 CORS(app, 
      resources={
          r"/events/*": {
              "origins": "*",
              "methods": ["GET"],
-             "allow_headers": ["Content-Type"],
+             "allow_headers": ["Content-Type", "Accept", "Last-Event-ID"],
              "expose_headers": ["Content-Type"],
+             "max_age": 3600
+         },
+         r"/uploads/*": {
+             "origins": "*",
+             "methods": ["GET", "OPTIONS"],
+             "allow_headers": ["Range", "Content-Type", "Accept"],
+             "expose_headers": ["Content-Range", "Accept-Ranges", "Content-Length"],
              "max_age": 3600
          },
          r"/*": {
@@ -346,6 +353,9 @@ def event_stream(task_id):
         
         logging.info(f"Starting SSE stream for task {task_id}")
         
+        # Send initial retry timeout
+        yield "retry: 1000\n\n"
+        
         while True:
             try:
                 current_time = time.time()
@@ -364,49 +374,40 @@ def event_stream(task_id):
                     
                     # Send only new events
                     for event in events[last_event_id:]:
-                        # Ensure the event is properly formatted
                         event_data = json.dumps(event)
-                        yield f"data: {event_data}\n\n"
+                        yield f"id: {last_event_id}\ndata: {event_data}\n\n"
                         last_event_id += 1
                         last_activity = current_time
                         
-                        # Log event details
-                        if event['type'] == 'batch':
-                            logging.info(f"Sending batch event for task {task_id} with {len(event['frames'])} frames")
-                        elif event['type'] in ['complete', 'error']:
-                            logging.info(f"Sending {event['type']} event for task {task_id}")
-                        
-                        # Clean up completed events to free memory
-                        if event['type'] in ['batch', 'complete', 'error']:
-                            events.remove(event)
-                    
-                    # If processing is complete or failed, close the stream
-                    if events and events[-1]['type'] in ['complete', 'error']:
-                        break
+                        if event['type'] in ['complete', 'error']:
+                            return
                 
-                # Send a keep-alive comment every 30 seconds
-                if current_time - last_activity > 30:
+                # Send keep-alive every 15 seconds
+                if current_time - last_activity > 15:
                     yield ": keep-alive\n\n"
                     last_activity = current_time
                 
-                time.sleep(0.1)  # Reduced sleep time to be more responsive
+                time.sleep(0.1)
                 
             except Exception as e:
                 logger.error(f"Error in event stream: {str(e)}")
                 retry_count += 1
                 if retry_count >= max_retries:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'Connection error'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
                     break
-                time.sleep(1)  # Wait before retrying
-        
-        logging.info(f"SSE stream ended for task {task_id}")
+                time.sleep(1)
     
+    # Set response headers for SSE
     response = Response(generate(), mimetype='text/event-stream')
-    response.headers['Cache-Control'] = 'no-cache, no-transform'
-    response.headers['Connection'] = 'keep-alive'
-    response.headers['X-Accel-Buffering'] = 'no'
-    # SSE specific CORS headers
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers.update({
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Accept, Last-Event-ID',
+        'Content-Type': 'text/event-stream',
+        'Transfer-Encoding': 'chunked'
+    })
     return response
 
 @app.route('/uploads/<path:filename>')
@@ -635,6 +636,18 @@ def detect():
             'success': False,
             'error': str(e)
         }), 500
+
+# Add OPTIONS handler for SSE endpoint
+@app.route('/events/<task_id>', methods=['OPTIONS'])
+def event_stream_options(task_id):
+    response = jsonify({'message': 'OK'})
+    response.headers.update({
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Accept, Last-Event-ID',
+        'Access-Control-Max-Age': '3600'
+    })
+    return response
 
 if __name__ == '__main__':
     try:
