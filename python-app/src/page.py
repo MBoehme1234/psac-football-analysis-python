@@ -352,8 +352,9 @@ def event_stream(task_id):
         
         logging.info(f"Starting SSE stream for task {task_id}")
         
-        # Send initial retry timeout
-        yield "retry: 1000\n\n"
+        # Send initial retry timeout and comment
+        yield "retry: 1000\n"
+        yield ": ping\n\n"
         
         while True:
             try:
@@ -383,7 +384,7 @@ def event_stream(task_id):
                 
                 # Send keep-alive every 15 seconds
                 if current_time - last_activity > 15:
-                    yield ": keep-alive\n\n"
+                    yield ": ping\n\n"
                     last_activity = current_time
                 
                 time.sleep(0.1)
@@ -402,8 +403,6 @@ def event_stream(task_id):
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type, Accept, Last-Event-ID',
         'Content-Type': 'text/event-stream',
         'Transfer-Encoding': 'chunked'
     })
