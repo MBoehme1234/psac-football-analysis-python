@@ -39,21 +39,21 @@ app = Flask(__name__)
 # CORS configuration with specific rules for all endpoints
 CORS(app, 
      resources={
-         r"/events/*": {
+         r"/+events/.*": {
              "origins": "*",
              "methods": ["GET"],
              "allow_headers": ["Content-Type", "Accept", "Last-Event-ID"],
              "expose_headers": ["Content-Type"],
              "max_age": 3600
          },
-         r"/uploads/*": {
+         r"/+uploads/.*": {
              "origins": "*",
              "methods": ["GET", "OPTIONS"],
              "allow_headers": ["Range", "Content-Type", "Accept"],
              "expose_headers": ["Content-Range", "Accept-Ranges", "Content-Length"],
              "max_age": 3600
          },
-         r"/*": {
+         r"/.*": {
              "origins": "*",
              "methods": ["GET", "POST", "OPTIONS"],
              "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"],
@@ -65,12 +65,13 @@ CORS(app,
 # Add non-CORS headers to responses
 @app.after_request
 def after_request(response):
-    if request.path.startswith('/events/'):
+    if request.path.startswith(('/events', '//events')):
         # Special headers for SSE endpoints
         response.headers['Cache-Control'] = 'no-cache'
         response.headers['Connection'] = 'keep-alive'
         response.headers['Content-Type'] = 'text/event-stream'
-    elif request.path.startswith('/uploads/'):
+        response.headers['X-Accel-Buffering'] = 'no'
+    elif request.path.startswith(('/uploads', '//uploads')):
         # Special headers for video streaming
         response.headers['Accept-Ranges'] = 'bytes'
         response.headers['Cache-Control'] = 'no-cache'
