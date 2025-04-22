@@ -36,14 +36,13 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# More permissive CORS configuration
+# CORS configuration without credentials support
 CORS(app, 
      resources={r"/*": {
          "origins": "*",
          "methods": ["GET", "POST", "OPTIONS"],
          "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"],
          "expose_headers": ["Content-Type", "X-SSE-Event"],
-         "supports_credentials": True,
          "max_age": 3600,
          "send_wildcard": True
      }})
@@ -54,7 +53,6 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control')
     response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
     response.headers.add('Access-Control-Max-Age', '3600')
     return response
 
@@ -394,7 +392,6 @@ def event_stream(task_id):
     response.headers['X-Accel-Buffering'] = 'no'
     # SSE specific CORS headers
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
     return response
 
 @app.route('/uploads/<path:filename>')
