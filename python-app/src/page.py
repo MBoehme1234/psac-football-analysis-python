@@ -48,8 +48,16 @@ CORS(app, resources={
 
 # Configure upload folder
 UPLOAD_FOLDER = 'uploads'
+TEMP_FOLDER = os.path.join(UPLOAD_FOLDER, 'temp')
+
+# Ensure both directories exist
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+if not os.path.exists(TEMP_FOLDER):
+    os.makedirs(TEMP_FOLDER)
+
+# Configure tempfile to use our directory
+tempfile.tempdir = TEMP_FOLDER
 
 # Load YOLO model
 model_path = os.path.join(os.path.dirname(__file__), 'yolov8n.pt')
@@ -104,6 +112,15 @@ def process_frame(frame):
 def process_video(video_path, task_id):
     """Process video frame by frame and create a new MP4"""
     try:
+        # Clean up old temp files before processing
+        for f in os.listdir(TEMP_FOLDER):
+            try:
+                file_path = os.path.join(TEMP_FOLDER, f)
+                if os.path.isfile(file_path):
+                    os.unlink(file_path)
+            except Exception as e:
+                logger.warning(f"Error cleaning temp file {f}: {e}")
+
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise Exception("Failed to open video file")
@@ -116,114 +133,110 @@ def process_video(video_path, task_id):
 
         logging.info(f"Processing video: {frame_width}x{frame_height} @ {fps}fps, {total_frames} frames")
 
-        # Create temporary directory for frames
-        with tempfile.TemporaryDirectory() as temp_dir:
-            logging.info(f"Created temporary directory for frames: {temp_dir}")
-            
-            # Process frames and save as images
-            frame_count = 0
-            failed_frames = []
+        # Process frames and save as images
+        frame_count = 0
+        failed_frames = []
 
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-                try:
-                    # Process frame
-                    processed_frame = process_frame(frame)
-                    
-                    # Save frame as image
-                    frame_path = os.path.join(temp_dir, f'frame_{frame_count:06d}.png')
-                    success = cv2.imwrite(frame_path, processed_frame)
-                    
-                    if not success:
-                        logging.error(f"Failed to write frame {frame_count}")
-                        failed_frames.append(frame_count)
-                    elif frame_count % 100 == 0:
-                        logging.info(f"Successfully wrote frame {frame_count}")
-                    
-                    # Update progress
-                    frame_count += 1
-                    progress = int((frame_count / total_frames) * 100)
-                    
-                    # Send progress update
-                    with results_lock:
-                        if task_id not in processing_results:
-                            processing_results[task_id] = {'events': []}
-                        processing_results[task_id]['events'].append({
-                            'type': 'progress',
-                            'progress': progress,
-                            'current_frame': frame_count,
-                            'total_frames': total_frames
-                        })
-
-                except Exception as e:
-                    logging.error(f"Error processing frame {frame_count}: {str(e)}")
-                    failed_frames.append(frame_count)
-
-            # Release video capture
-            cap.release()
-
-            if frame_count == 0:
-                raise Exception("No frames were processed")
-
-            # Create output video using FFmpeg
-            output_filename = f'processed_{task_id}.mp4'
-            output_path = os.path.join(UPLOAD_FOLDER, output_filename)
-            
-            # FFmpeg command to create video from frames
-            ffmpeg_cmd = [
-                'ffmpeg',
-                '-y',  # Overwrite output file if it exists
-                '-framerate', str(fps),
-                '-i', os.path.join(temp_dir, 'frame_%06d.png'),
-                '-c:v', 'libx264',  # Use H.264 codec
-                '-preset', 'medium',  # Balance between speed and compression
-                '-pix_fmt', 'yuv420p',  # Standard pixel format for web playback
-                '-movflags', '+faststart',  # Enable fast start for web playback
-                output_path
-            ]
-            
-            logging.info(f"Running FFmpeg command: {' '.join(ffmpeg_cmd)}")
-            
-            # Run FFmpeg
             try:
-                result = subprocess.run(
-                    ffmpeg_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
+                # Process frame
+                processed_frame = process_frame(frame)
                 
-                if result.returncode != 0:
-                    logging.error(f"FFmpeg error: {result.stderr}")
-                    raise Exception(f"FFmpeg failed with error: {result.stderr}")
-                else:
-                    logging.info("FFmpeg successfully created video file")
+                # Save frame as image
+                frame_path = os.path.join(TEMP_FOLDER, f'frame_{frame_count:06d}.png')
+                success = cv2.imwrite(frame_path, processed_frame)
                 
+                if not success:
+                    logging.error(f"Failed to write frame {frame_count}")
+                    failed_frames.append(frame_count)
+                elif frame_count % 100 == 0:
+                    logging.info(f"Successfully wrote frame {frame_count}")
+                
+                # Update progress
+                frame_count += 1
+                progress = int((frame_count / total_frames) * 100)
+                
+                # Send progress update
+                with results_lock:
+                    if task_id not in processing_results:
+                        processing_results[task_id] = {'events': []}
+                    processing_results[task_id]['events'].append({
+                        'type': 'progress',
+                        'progress': progress,
+                        'current_frame': frame_count,
+                        'total_frames': total_frames
+                    })
+
             except Exception as e:
-                logging.error(f"Error running FFmpeg: {str(e)}")
-                raise
+                logging.error(f"Error processing frame {frame_count}: {str(e)}")
+                failed_frames.append(frame_count)
 
-            # Verify the output file exists and has size
-            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-                raise Exception("Output video file is empty or does not exist")
+        # Release video capture
+        cap.release()
+
+        if frame_count == 0:
+            raise Exception("No frames were processed")
+
+        # Create output video using FFmpeg
+        output_filename = f'processed_{task_id}.mp4'
+        output_path = os.path.join(UPLOAD_FOLDER, output_filename)
+        
+        # FFmpeg command to create video from frames
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-y',  # Overwrite output file if it exists
+            '-framerate', str(fps),
+            '-i', os.path.join(TEMP_FOLDER, 'frame_%06d.png'),
+            '-c:v', 'libx264',  # Use H.264 codec
+            '-preset', 'medium',  # Balance between speed and compression
+            '-pix_fmt', 'yuv420p',  # Standard pixel format for web playback
+            '-movflags', '+faststart',  # Enable fast start for web playback
+            output_path
+        ]
+        
+        logging.info(f"Running FFmpeg command: {' '.join(ffmpeg_cmd)}")
+        
+        # Run FFmpeg
+        try:
+            result = subprocess.run(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                logging.error(f"FFmpeg error: {result.stderr}")
+                raise Exception(f"FFmpeg failed with error: {result.stderr}")
             else:
-                file_size = os.path.getsize(output_path)
-                logging.info(f"Successfully created output video file. Size: {file_size} bytes")
+                logging.info("FFmpeg successfully created video file")
+            
+        except Exception as e:
+            logging.error(f"Error running FFmpeg: {str(e)}")
+            raise
 
-            # Send completion event with video URL
-            with results_lock:
-                if task_id not in processing_results:
-                    processing_results[task_id] = {'events': []}
-                processing_results[task_id]['events'].append({
-                    'type': 'complete',
-                    'video_url': f'/uploads/{output_filename}',
-                    'total_frames': frame_count,
-                    'failed_frames': failed_frames
-                })
-                logging.info(f"Processing complete for task {task_id}. Total frames: {frame_count}, Failed frames: {len(failed_frames)}")
+        # Verify the output file exists and has size
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise Exception("Output video file is empty or does not exist")
+        else:
+            file_size = os.path.getsize(output_path)
+            logging.info(f"Successfully created output video file. Size: {file_size} bytes")
+
+        # Send completion event with video URL
+        with results_lock:
+            if task_id not in processing_results:
+                processing_results[task_id] = {'events': []}
+            processing_results[task_id]['events'].append({
+                'type': 'complete',
+                'video_url': f'/uploads/{output_filename}',
+                'total_frames': frame_count,
+                'failed_frames': failed_frames
+            })
+            logging.info(f"Processing complete for task {task_id}. Total frames: {frame_count}, Failed frames: {len(failed_frames)}")
 
         # Clean up the original uploaded file
         try:
@@ -245,49 +258,66 @@ def process_video(video_path, task_id):
 def upload_file():
     try:
         if 'file' not in request.files:
-            return jsonify({'error': 'No file part'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'No selected file'}), 400
-
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
-            
-            try:
-                file.save(filepath)
-                logger.info(f"Successfully saved uploaded file: {filepath}")
-                
-                # Generate a unique task ID
-                task_id = str(uuid.uuid4())
-                
-                # Start processing in a separate thread
-                thread = Thread(target=process_video, args=(filepath, task_id))
-                thread.daemon = True
-                thread.start()
-                
-                return jsonify({
-                    'task_id': task_id,
-                    'message': 'File uploaded successfully. Processing started.',
-                    'status': 'processing'
-                }), 202
-                
-            except Exception as e:
-                logger.error(f"Error saving or processing file: {str(e)}")
-                # Clean up the file if it was saved
-                if os.path.exists(filepath):
-                    try:
-                        os.remove(filepath)
-                    except Exception as cleanup_error:
-                        logger.error(f"Error cleaning up file after failed processing: {cleanup_error}")
-                return jsonify({'error': f'Error processing file: {str(e)}'}), 500
+            response = jsonify({'error': 'No file part'}), 400
         else:
-            return jsonify({'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
-            
+            file = request.files['file']
+            if file.filename == '':
+                response = jsonify({'error': 'No selected file'}), 400
+            elif file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                filepath = os.path.join(UPLOAD_FOLDER, filename)
+                
+                try:
+                    file.save(filepath)
+                    logger.info(f"Successfully saved uploaded file: {filepath}")
+                    
+                    # Generate a unique task ID
+                    task_id = str(uuid.uuid4())
+                    
+                    # Start processing in a separate thread
+                    thread = Thread(target=process_video, args=(filepath, task_id))
+                    thread.daemon = True
+                    thread.start()
+                    
+                    response = jsonify({
+                        'task_id': task_id,
+                        'message': 'File uploaded successfully. Processing started.',
+                        'status': 'processing'
+                    }), 202
+                    
+                except Exception as e:
+                    logger.error(f"Error saving or processing file: {str(e)}")
+                    # Clean up the file if it was saved
+                    if os.path.exists(filepath):
+                        try:
+                            os.remove(filepath)
+                        except Exception as cleanup_error:
+                            logger.error(f"Error cleaning up file after failed processing: {cleanup_error}")
+                    response = jsonify({'error': f'Error processing file: {str(e)}'}), 500
+            else:
+                response = jsonify({'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
     except Exception as e:
         logger.error(f"Unexpected error in upload_file: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
+        response = jsonify({'error': 'Internal server error'}), 500
+
+    # Add CORS headers to response
+    response_obj, status_code = response
+    response_obj.headers['Access-Control-Allow-Origin'] = '*'
+    response_obj.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+    response_obj.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control'
+    response_obj.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response_obj, status_code
+
+# Add OPTIONS handler for upload endpoint
+@app.route('/upload', methods=['OPTIONS'])
+def upload_options():
+    response = jsonify({'message': 'OK'})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Max-Age'] = '3600'
+    return response
 
 @app.route('/events/<task_id>')
 def event_stream(task_id):
