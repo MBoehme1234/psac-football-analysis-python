@@ -35,7 +35,20 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "http://localhost:3000",
+            "https://localhost:3000",
+            "http://fcguidance.net",
+            "https://fcguidance.net",
+            "http://www.fcguidance.net",
+            "https://www.fcguidance.net"
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
+    }
+})
 
 # Configure upload folder
 UPLOAD_FOLDER = 'uploads'
