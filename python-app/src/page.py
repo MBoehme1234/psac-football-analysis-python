@@ -36,7 +36,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# CORS configuration with specific rules for SSE
+# CORS configuration with specific rules for all endpoints
 CORS(app, 
      resources={
          r"/events/*": {
@@ -62,20 +62,18 @@ CORS(app,
          }
      })
 
-# Add CORS headers to all responses
+# Add non-CORS headers to responses
 @app.after_request
 def after_request(response):
     if request.path.startswith('/events/'):
         # Special headers for SSE endpoints
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         response.headers['Cache-Control'] = 'no-cache'
         response.headers['Connection'] = 'keep-alive'
-    else:
-        # Regular CORS headers for other endpoints
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Content-Type'] = 'text/event-stream'
+    elif request.path.startswith('/uploads/'):
+        # Special headers for video streaming
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Cache-Control'] = 'no-cache'
     return response
 
 # Configure upload folder
@@ -449,10 +447,6 @@ def serve_file(filename):
                 'Accept-Ranges': 'bytes',
                 'Content-Length': str(byte_end - byte_start + 1),
                 'Content-Type': 'video/mp4',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                'Access-Control-Allow-Headers': 'Range, Content-Type',
-                'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
                 'Cache-Control': 'no-cache'
             })
             
@@ -467,10 +461,6 @@ def serve_file(filename):
             response.headers.update({
                 'Accept-Ranges': 'bytes',
                 'Content-Length': str(file_size),
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                'Access-Control-Allow-Headers': 'Range, Content-Type',
-                'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
                 'Cache-Control': 'no-cache'
             })
         
@@ -483,15 +473,7 @@ def serve_file(filename):
 # Add OPTIONS handler for video streaming
 @app.route('/uploads/<path:filename>', methods=['OPTIONS'])
 def serve_file_options(filename):
-    response = jsonify({'message': 'OK'})
-    response.headers.update({
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Range, Content-Type',
-        'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
-        'Access-Control-Max-Age': '3600'
-    })
-    return response
+    return '', 204
 
 def process_image(image_path, max_size=640):
     """Process image with memory optimization"""
