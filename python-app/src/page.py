@@ -341,16 +341,6 @@ def upload_file():
 @app.route('/events/<task_id>')
 def event_stream(task_id):
     """SSE endpoint for real-time status updates"""
-    # Set response headers for SSE immediately
-    response = Response(mimetype='text/event-stream')
-    response.headers.update({
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        'Content-Type': 'text/event-stream',
-        'Transfer-Encoding': 'chunked'
-    })
-
     def generate():
         last_event_id = 0
         retry_count = 0
@@ -359,6 +349,16 @@ def event_stream(task_id):
         timeout = 60  # 60 seconds timeout
         
         logging.info(f"Starting SSE stream for task {task_id}")
+        
+        # Send headers with initial connection
+        yield "Access-Control-Allow-Origin: *\n"
+        yield "Access-Control-Allow-Methods: GET, OPTIONS\n"
+        yield "Access-Control-Allow-Headers: Content-Type, Accept, Last-Event-ID\n"
+        yield "Cache-Control: no-cache\n"
+        yield "Connection: keep-alive\n"
+        yield "Content-Type: text/event-stream\n"
+        yield "X-Accel-Buffering: no\n"
+        yield "\n"  # Empty line to separate headers from events
         
         # Send initial retry timeout and comment
         yield "retry: 1000\n"
@@ -369,11 +369,13 @@ def event_stream(task_id):
                 current_time = time.time()
                 if current_time - last_activity > timeout:
                     logger.warning(f"Connection timeout for task {task_id}")
+                    yield "Access-Control-Allow-Origin: *\n"
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Connection timeout'})}\n\n"
                     break
 
                 with results_lock:
                     if task_id not in processing_results:
+                        yield "Access-Control-Allow-Origin: *\n"
                         yield f"data: {json.dumps({'type': 'error', 'message': 'Task not found'})}\n\n"
                         break
                     
@@ -383,6 +385,7 @@ def event_stream(task_id):
                     # Send only new events
                     for event in events[last_event_id:]:
                         event_data = json.dumps(event)
+                        yield "Access-Control-Allow-Origin: *\n"
                         yield f"id: {last_event_id}\ndata: {event_data}\n\n"
                         last_event_id += 1
                         last_activity = current_time
@@ -392,6 +395,7 @@ def event_stream(task_id):
                 
                 # Send keep-alive every 15 seconds
                 if current_time - last_activity > 15:
+                    yield "Access-Control-Allow-Origin: *\n"
                     yield ": ping\n\n"
                     last_activity = current_time
                 
@@ -401,13 +405,12 @@ def event_stream(task_id):
                 logger.error(f"Error in event stream: {str(e)}")
                 retry_count += 1
                 if retry_count >= max_retries:
+                    yield "Access-Control-Allow-Origin: *\n"
                     yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
                     break
                 time.sleep(1)
     
-    # Attach the generator to the response
-    response.response = generate()
-    return response
+    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/uploads/<path:filename>')
 @app.route('/uploads/<path:filename>/')
