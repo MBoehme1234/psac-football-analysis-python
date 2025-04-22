@@ -39,14 +39,13 @@ app = Flask(__name__)
 # CORS configuration with specific rules for all endpoints
 CORS(app, 
      resources={
-         r"/+events/.*": {
+         r"/events/.*": {
              "origins": "*",
-             "methods": ["GET"],
+             "methods": ["GET", "OPTIONS"],
              "allow_headers": ["Content-Type", "Accept", "Last-Event-ID"],
-             "expose_headers": ["Content-Type"],
              "max_age": 3600
          },
-         r"/+uploads/.*": {
+         r"/uploads/.*": {
              "origins": "*",
              "methods": ["GET", "OPTIONS"],
              "allow_headers": ["Range", "Content-Type", "Accept"],
@@ -57,7 +56,6 @@ CORS(app,
              "origins": "*",
              "methods": ["GET", "POST", "OPTIONS"],
              "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"],
-             "expose_headers": ["Content-Type"],
              "max_age": 3600
          }
      })
