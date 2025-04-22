@@ -245,30 +245,40 @@ def upload_file():
         if file and allowed_file(file.filename):
             filename = secure_filename(file.filename)
             filepath = os.path.join(UPLOAD_FOLDER, filename)
-            file.save(filepath)
             
-            # Generate a unique task ID
-            task_id = str(uuid.uuid4())
-            
-            # Initialize task entry
-            with results_lock:
-                processing_results[task_id] = {'events': []}
-            
-            # Start processing in a background thread
-            thread = Thread(target=process_video, args=(filepath, task_id))
-            thread.daemon = True
-            thread.start()
-            
-            return jsonify({
-                'message': 'Processing started',
-                'task_id': task_id
-            })
+            try:
+                file.save(filepath)
+                logger.info(f"Successfully saved uploaded file: {filepath}")
+                
+                # Generate a unique task ID
+                task_id = str(uuid.uuid4())
+                
+                # Start processing in a separate thread
+                thread = Thread(target=process_video, args=(filepath, task_id))
+                thread.daemon = True
+                thread.start()
+                
+                return jsonify({
+                    'task_id': task_id,
+                    'message': 'File uploaded successfully. Processing started.',
+                    'status': 'processing'
+                }), 202
+                
+            except Exception as e:
+                logger.error(f"Error saving or processing file: {str(e)}")
+                # Clean up the file if it was saved
+                if os.path.exists(filepath):
+                    try:
+                        os.remove(filepath)
+                    except Exception as cleanup_error:
+                        logger.error(f"Error cleaning up file after failed processing: {cleanup_error}")
+                return jsonify({'error': f'Error processing file: {str(e)}'}), 500
         else:
-            return jsonify({'error': 'File type not allowed'}), 400
-
+            return jsonify({'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+            
     except Exception as e:
-        logging.error(f"Error in upload_file: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Unexpected error in upload_file: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/events/<task_id>')
 def event_stream(task_id):
@@ -553,4 +563,26 @@ def detect():
         }), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    try:
+        # Ensure the upload directory exists
+        if not os.path.exists(UPLOAD_FOLDER):
+            os.makedirs(UPLOAD_FOLDER)
+            
+        # Clean up any existing temporary files
+        temp_files = [f for f in os.listdir(UPLOAD_FOLDER) if f.startswith('processed_')]
+        for f in temp_files:
+            try:
+                os.remove(os.path.join(UPLOAD_FOLDER, f))
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {f}: {e}")
+                
+        # Configure server to only listen on localhost
+        app.run(
+            host='127.0.0.1',
+            port=5000,
+            debug=False,
+            use_reloader=False  # Disable reloader when running with nginx
+        )
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}")
+        raise
