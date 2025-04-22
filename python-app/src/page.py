@@ -35,16 +35,28 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={
-    r"/*": {
-        "origins": ["*"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"],
-        "expose_headers": ["Content-Type", "X-SSE-Event"],
-        "supports_credentials": True,
-        "max_age": 3600
-    }
-})
+
+# More permissive CORS configuration
+CORS(app, 
+     resources={r"/*": {
+         "origins": "*",
+         "methods": ["GET", "POST", "OPTIONS"],
+         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"],
+         "expose_headers": ["Content-Type", "X-SSE-Event"],
+         "supports_credentials": True,
+         "max_age": 3600,
+         "send_wildcard": True
+     }})
+
+# Add CORS headers to all responses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Max-Age', '3600')
+    return response
 
 # Configure upload folder
 UPLOAD_FOLDER = 'uploads'
@@ -254,70 +266,60 @@ def process_video(video_path, task_id):
                 'error': str(e)
             })
 
-@app.route('/upload', methods=['POST'])
+@app.route('/upload', methods=['POST', 'OPTIONS'])
 def upload_file():
+    if request.method == 'OPTIONS':
+        return '', 204
+
     try:
         if 'file' not in request.files:
-            response = jsonify({'error': 'No file part'}), 400
-        else:
-            file = request.files['file']
-            if file.filename == '':
-                response = jsonify({'error': 'No selected file'}), 400
-            elif file and allowed_file(file.filename):
-                filename = secure_filename(file.filename)
-                filepath = os.path.join(UPLOAD_FOLDER, filename)
+            return jsonify({'error': 'No file part'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
+
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            
+            try:
+                file.save(filepath)
+                logger.info(f"Successfully saved uploaded file: {filepath}")
                 
-                try:
-                    file.save(filepath)
-                    logger.info(f"Successfully saved uploaded file: {filepath}")
-                    
-                    # Generate a unique task ID
-                    task_id = str(uuid.uuid4())
-                    
-                    # Start processing in a separate thread
-                    thread = Thread(target=process_video, args=(filepath, task_id))
-                    thread.daemon = True
-                    thread.start()
-                    
-                    response = jsonify({
-                        'task_id': task_id,
-                        'message': 'File uploaded successfully. Processing started.',
-                        'status': 'processing'
-                    }), 202
-                    
-                except Exception as e:
-                    logger.error(f"Error saving or processing file: {str(e)}")
-                    # Clean up the file if it was saved
-                    if os.path.exists(filepath):
-                        try:
-                            os.remove(filepath)
-                        except Exception as cleanup_error:
-                            logger.error(f"Error cleaning up file after failed processing: {cleanup_error}")
-                    response = jsonify({'error': f'Error processing file: {str(e)}'}), 500
-            else:
-                response = jsonify({'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+                # Generate a unique task ID
+                task_id = str(uuid.uuid4())
+                
+                # Initialize task entry
+                with results_lock:
+                    processing_results[task_id] = {'events': []}
+                
+                # Start processing in a separate thread
+                thread = Thread(target=process_video, args=(filepath, task_id))
+                thread.daemon = True
+                thread.start()
+                
+                return jsonify({
+                    'task_id': task_id,
+                    'message': 'File uploaded successfully. Processing started.',
+                    'status': 'processing'
+                }), 202
+                
+            except Exception as e:
+                logger.error(f"Error saving or processing file: {str(e)}")
+                # Clean up the file if it was saved
+                if os.path.exists(filepath):
+                    try:
+                        os.remove(filepath)
+                    except Exception as cleanup_error:
+                        logger.error(f"Error cleaning up file after failed processing: {cleanup_error}")
+                return jsonify({'error': f'Error processing file: {str(e)}'}), 500
+        else:
+            return jsonify({'error': f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+            
     except Exception as e:
         logger.error(f"Unexpected error in upload_file: {str(e)}")
-        response = jsonify({'error': 'Internal server error'}), 500
-
-    # Add CORS headers to response
-    response_obj, status_code = response
-    response_obj.headers['Access-Control-Allow-Origin'] = '*'
-    response_obj.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
-    response_obj.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control'
-    response_obj.headers['Access-Control-Allow-Credentials'] = 'true'
-    return response_obj, status_code
-
-# Add OPTIONS handler for upload endpoint
-@app.route('/upload', methods=['OPTIONS'])
-def upload_options():
-    response = jsonify({'message': 'OK'})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['Access-Control-Max-Age'] = '3600'
-    return response
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/events/<task_id>')
 def event_stream(task_id):
@@ -390,10 +392,9 @@ def event_stream(task_id):
     response.headers['Cache-Control'] = 'no-cache, no-transform'
     response.headers['Connection'] = 'keep-alive'
     response.headers['X-Accel-Buffering'] = 'no'
+    # SSE specific CORS headers
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control'
     return response
 
 @app.route('/uploads/<path:filename>')
