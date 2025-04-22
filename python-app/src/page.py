@@ -36,24 +36,39 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# CORS configuration without credentials support
+# CORS configuration for both regular endpoints and SSE
 CORS(app, 
-     resources={r"/*": {
-         "origins": "*",
-         "methods": ["GET", "POST", "OPTIONS"],
-         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"],
-         "expose_headers": ["Content-Type", "X-SSE-Event"],
-         "max_age": 3600,
-         "send_wildcard": True
-     }})
+     resources={
+         r"/events/*": {
+             "origins": "*",
+             "methods": ["GET"],
+             "allow_headers": ["Content-Type"],
+             "expose_headers": ["Content-Type"],
+             "max_age": 3600
+         },
+         r"/*": {
+             "origins": "*",
+             "methods": ["GET", "POST", "OPTIONS"],
+             "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"],
+             "expose_headers": ["Content-Type"],
+             "max_age": 3600
+         }
+     })
 
 # Add CORS headers to all responses
 @app.after_request
 def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control')
-    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    response.headers.add('Access-Control-Max-Age', '3600')
+    if request.path.startswith('/events/'):
+        # Special headers for SSE endpoints
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        response.headers['Cache-Control'] = 'no-cache'
+        response.headers['Connection'] = 'keep-alive'
+    else:
+        # Regular CORS headers for other endpoints
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     return response
 
 # Configure upload folder
@@ -398,11 +413,10 @@ def event_stream(task_id):
 @app.route('/uploads/<path:filename>/')
 def serve_file(filename):
     """Serve processed video files"""
-    print(f"[INFO] Serving file: {filename} from {UPLOAD_FOLDER}")
     try:
         file_path = os.path.join(UPLOAD_FOLDER, filename)
         if not os.path.exists(file_path):
-            print(f"[ERROR] File not found: {file_path}")
+            logger.error(f"File not found: {file_path}")
             return jsonify({'error': 'File not found'}), 404
             
         # Get file size
@@ -413,15 +427,14 @@ def serve_file(filename):
         
         if range_header:
             # Parse range header
-            start_bytes = int(range_header.split('=')[1].split('-')[0])
-            end_bytes = min(start_bytes + 1024 * 1024, file_size - 1)  # 1MB chunks
+            byte_start = int(range_header.split('=')[1].split('-')[0])
+            byte_end = min(byte_start + 1024*1024, file_size - 1)  # 1MB chunks
             
             # Read file chunk
             with open(file_path, 'rb') as f:
-                f.seek(start_bytes)
-                data = f.read(end_bytes - start_bytes + 1)
+                f.seek(byte_start)
+                data = f.read(byte_end - byte_start + 1)
             
-            # Create response
             response = Response(
                 data,
                 206,  # Partial content
@@ -429,13 +442,18 @@ def serve_file(filename):
                 direct_passthrough=True
             )
             
-            # Add headers
-            response.headers.add('Content-Range', f'bytes {start_bytes}-{end_bytes}/{file_size}')
-            response.headers.add('Accept-Ranges', 'bytes')
-            response.headers.add('Content-Length', str(end_bytes - start_bytes + 1))
-            response.headers.add('Content-Type', 'video/mp4')
-            response.headers.add('Cache-Control', 'no-cache')
-            response.headers.add('Connection', 'keep-alive')
+            # Add headers for range request
+            response.headers.update({
+                'Content-Range': f'bytes {byte_start}-{byte_end}/{file_size}',
+                'Accept-Ranges': 'bytes',
+                'Content-Length': str(byte_end - byte_start + 1),
+                'Content-Type': 'video/mp4',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, OPTIONS',
+                'Access-Control-Allow-Headers': 'Range, Content-Type',
+                'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
+                'Cache-Control': 'no-cache'
+            })
             
         else:
             # Full file response
@@ -445,16 +463,34 @@ def serve_file(filename):
                 as_attachment=False,
                 conditional=True
             )
-            response.headers.add('Accept-Ranges', 'bytes')
-            response.headers.add('Content-Length', str(file_size))
-            response.headers.add('Cache-Control', 'no-cache')
-            response.headers.add('Connection', 'keep-alive')
+            response.headers.update({
+                'Accept-Ranges': 'bytes',
+                'Content-Length': str(file_size),
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, OPTIONS',
+                'Access-Control-Allow-Headers': 'Range, Content-Type',
+                'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
+                'Cache-Control': 'no-cache'
+            })
         
         return response
         
     except Exception as e:
-        print(f"[ERROR] Error serving file: {str(e)}")
-        return jsonify({'error': str(e)}), 404
+        logger.error(f"Error serving file: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# Add OPTIONS handler for video streaming
+@app.route('/uploads/<path:filename>', methods=['OPTIONS'])
+def serve_file_options(filename):
+    response = jsonify({'message': 'OK'})
+    response.headers.update({
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Range, Content-Type',
+        'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
+        'Access-Control-Max-Age': '3600'
+    })
+    return response
 
 def process_image(image_path, max_size=640):
     """Process image with memory optimization"""
