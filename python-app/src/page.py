@@ -341,6 +341,16 @@ def upload_file():
 @app.route('/events/<task_id>')
 def event_stream(task_id):
     """SSE endpoint for real-time status updates"""
+    # Set response headers for SSE immediately
+    response = Response(mimetype='text/event-stream')
+    response.headers.update({
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        'Content-Type': 'text/event-stream',
+        'Transfer-Encoding': 'chunked'
+    })
+
     def generate():
         last_event_id = 0
         retry_count = 0
@@ -395,15 +405,8 @@ def event_stream(task_id):
                     break
                 time.sleep(1)
     
-    # Set response headers for SSE
-    response = Response(generate(), mimetype='text/event-stream')
-    response.headers.update({
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        'Content-Type': 'text/event-stream',
-        'Transfer-Encoding': 'chunked'
-    })
+    # Attach the generator to the response
+    response.response = generate()
     return response
 
 @app.route('/uploads/<path:filename>')
