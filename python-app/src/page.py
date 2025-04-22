@@ -37,16 +37,12 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
-        "origins": [
-            "http://localhost:3000",
-            "https://localhost:3000",
-            "http://fcguidance.net",
-            "https://fcguidance.net",
-            "http://www.fcguidance.net",
-            "https://www.fcguidance.net"
-        ],
+        "origins": ["*"],
         "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Cache-Control"],
+        "expose_headers": ["Content-Type", "X-SSE-Event"],
+        "supports_credentials": True,
+        "max_age": 3600
     }
 })
 
@@ -365,8 +361,9 @@ def event_stream(task_id):
     response.headers['Connection'] = 'keep-alive'
     response.headers['X-Accel-Buffering'] = 'no'
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Cache-Control'
     return response
 
 @app.route('/uploads/<path:filename>')
